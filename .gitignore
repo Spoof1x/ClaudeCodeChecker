@@ -1,0 +1,11 @@
+data.json
+sessions.json
+*.log
+*.output
+
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
