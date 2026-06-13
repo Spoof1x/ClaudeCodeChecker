@@ -1,7 +1,9 @@
 data.json
 sessions.json
+*.har
 *.log
 *.output
+update
 
 
 # Python

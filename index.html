@@ -107,8 +107,13 @@ input.txt:focus{outline:none;border-color:#3a3a3a}
 .tokval{font-size:12px;word-break:break-all;color:#3ad07a;line-height:1.5}
 .tokok .mini{background:#1f5132;border:1px solid #3ad07a;color:#d6ffe6;font-weight:600;padding:7px 16px}
 .tokok .mini:hover:not(:disabled){background:#2a6e44;border-color:#7ef0a8;color:#fff}
+.tokrow{display:flex;gap:12px;align-items:center;width:100%}
+.tokrow .tokval{flex:1;min-width:0}
+.tokrow .mini{flex:none;white-space:nowrap}
 .tokerr{background:#2a0f0f;border:1px solid #5a2424;color:#ff6b6b;border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.5;word-break:break-word}
-.oaurl{width:100%;min-height:62px;resize:vertical;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;scrollbar-width:thin;scrollbar-color:#3a3a3a transparent}
+.oaurl{width:100%;min-height:62px;resize:vertical;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#0b0b0b;border:1px solid var(--line2);color:var(--txt);border-radius:10px;padding:10px 12px;scrollbar-width:thin;scrollbar-color:#3a3a3a transparent}
+.oaurl:focus{outline:none;border-color:#3a3a3a}
+.oaurl::placeholder{color:var(--dim2)}
 .oaurl::-webkit-scrollbar{width:10px;height:10px}
 .oaurl::-webkit-scrollbar-track{background:transparent;margin:4px 0}
 .oaurl::-webkit-scrollbar-thumb{background:#2c2c2c;border:2px solid #0b0b0b;border-radius:8px}
@@ -381,6 +386,15 @@ a:hover{border-color:var(--txt)}
 .r-ok .ric{color:#3ad07a}.r-ok .rtx{color:#3ad07a}
 .r-err .ric{color:#ff6b6b}.r-err .rtx{color:#ff8a8a}
 .r-sk .ric{color:var(--dim2)}
+.giftpick{display:flex;flex-direction:column;gap:12px}
+.giftpick label{display:flex;justify-content:space-between;align-items:center;gap:14px;font-size:14px;color:var(--txt)}
+.giftpick .sel{min-width:170px}
+.parsebox{margin:14px 0 0;padding:16px 18px;background:var(--card);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;gap:10px}
+.parsebox[hidden]{display:none}
+.parse-sub{font-size:12px;color:var(--dim);line-height:1.5;margin-bottom:2px}
+.parse-sub b{color:var(--claude);font-weight:600}
+.parserow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.parsetoolbar{margin-top:14px}
 .check.danger-btn:hover{background:#d83b40;opacity:1}
 
 .tip{position:fixed;z-index:200;background:#1c1c1c;border:1px solid var(--line2);color:var(--txt);
@@ -438,9 +452,19 @@ a:hover{border-color:var(--txt)}
     </nav>
 
     <div id="sub-baza">
-      <div class="ptoolbar">
+      <div id="parsebox" class="parsebox">
+        <div class="parse-sub">Вставь текст или выбери файлы/папку — вытащу все <b>sessionKey</b> в БАЗУ.</div>
+        <textarea id="plog" class="oaurl" placeholder="Вставь логи сюда…"></textarea>
+        <div class="parserow">
+          <label class="file"><span id="pfileslabel">Выбрать файлы</span><input id="pfiles" type="file" multiple></label>
+          <label class="file"><span id="pfolderlabel">Выбрать папку</span><input id="pfolder" type="file" webkitdirectory directory multiple></label>
+          <span id="presult" class="muted"></span>
+          <span class="grow"></span>
+          <button id="pdoparse" class="check">Извлечь</button>
+        </div>
+      </div>
+      <div class="ptoolbar parsetoolbar">
         <div class="ptools-l">
-          <label class="file"><span id="filelabel">Загрузить куки</span><input id="file" type="file" accept=".json,.txt" multiple></label>
           <select id="bfstatus" class="sel">
             <option value="">статус: все</option>
             <option value="valid">valid</option>
@@ -459,6 +483,7 @@ a:hover{border-color:var(--txt)}
             <option value="topup50">Пополнить баланс · 50</option>
             <option value="topup250">Пополнить баланс · 250</option>
             <option value="topup1000">Пополнить баланс · 1000</option>
+            <option value="gift">Купить гифт…</option>
           </select>
           <button id="bcheckSel" class="mini" disabled>Проверить выбранные</button>
           <button id="bdel" class="mini danger" disabled>Удалить</button>
@@ -652,6 +677,22 @@ function ubar(label,b){
 }
 function needFullBlock(){return `<div class="empty" style="padding:26px 18px;text-align:center">Эти данные не тянутся при быстрой проверке.<br><button class="mini" style="margin-top:10px" onclick="loadFull(window.CURUUID,this)">Загрузить всё</button></div>`;}
 
+function refCard(d){
+  const rf=d.referral;
+  if(!rf)return '';
+  const cd=rf.referral_code_details||{};
+  const link=cd.referral_link||rf.share_link;
+  if(!rf.eligible||!link)return card('Реферальная ссылка','<div class="empty">Недоступно для этого аккаунта.</div>');
+  const passes=(rf.remaining_passes!=null&&rf.limit!=null)?`${rf.remaining_passes} из ${rf.limit}`:(rf.remaining_passes!=null?''+rf.remaining_passes:'—');
+  const rew=rf.referrer_reward;
+  const reward=(rew&&rew.amount_minor_units!=null)?money(rew.amount_minor_units,rew.currency):null;
+  const body=`<div class="tokok"><div class="tokrow"><span class="tokval mono">${esc(link)}</span>
+      <button class="mini" data-t="${esc(link)}" onclick="ccopy(this.dataset.t,this)">копировать</button></div></div>`
+    +row('Осталось пассов',esc(passes))
+    +(reward?row('Награда за приглашение',esc(reward)):'');
+  return card('Реферальная ссылка (Claude Code)',body);
+}
+
 function renderAccount(d){
   const a=d.account||{},o=d.org||{};
   const left=row('Имя',esc(a.full_name))+row('Ник',esc(a.display_name))
@@ -668,7 +709,8 @@ function renderAccount(d){
       row(x.name,x.disabled?`<span class="badge">${esc(x.disabled)}</span>`
         :(x.capabilities||[]).map(c=>`<span class="badge">${esc(c)}</span>`).join(' '))).join(''))+'</div>';
   }
-  return `<div class="grid">${card('Профиль',left)}${card('Подписка',right)}</div>${extra}`;
+  const ref=refCard(d);
+  return `<div class="grid">${card('Профиль',left)}${card('Подписка',right)}</div>${ref?`<div style="margin-top:14px">${ref}</div>`:''}${extra}`;
 }
 
 function ovControls(d){
@@ -689,9 +731,9 @@ function ovControls(d){
   return ovB+arB;
 }
 function renderBalance(d){
-  const s=d.subscription,b=d.balance,ov=d.overage;
-  if(window.NEEDFULL&&b==null&&s==null&&ov==null)return needFullBlock();
-  const bal=b?money(b.balance,b.currency):null;
+  const s=d.subscription,b=d.balance,ov=d.overage,cr=d.credits;
+  if(window.NEEDFULL&&b==null&&s==null&&ov==null&&cr==null)return needFullBlock();
+  const bal=(cr&&cr.amount!=null)?money(cr.amount,cr.currency):(b?money(b.balance,b.currency):null);
   const sub=s?(row('Статус',`<span class="badge ${s.status==='active'?'solid':''}">${esc(s.status)}</span>`)
     +row('Период',esc(s.billing_interval))+row('Следующее списание',day(s.next_charge_at)||esc(s.next_charge_date),1)
     +row('Карта',s.payment_method?`${esc(s.payment_method.brand)} ···· ${esc(s.payment_method.last4)}`:null)
@@ -934,7 +976,7 @@ if (typeof document !== 'undefined') {
     let j=null;
     try{j=await (await fetch('/api/account?uuid='+encodeURIComponent(uuid))).json();}catch(e){}
     if(activeSub!==uuid)return;
-    if(!j||!j.ok){clog(['АККАУНТ','нет в истории'],'warn');$('#dchecked').innerHTML='';$('[data-panel=account]').innerHTML='<div class="empty">Аккаунт не найден в истории.</div>';return;}
+    if(!j||!j.ok){clog(['АККАУНТ',String(uuid).slice(0,8),'нет в истории — вкладка закрыта'],'warn');closeTab(uuid);return;}
     ACCCACHE[uuid]=j;
     renderDetail(uuid,j);
   }
@@ -1031,8 +1073,8 @@ if (typeof document !== 'undefined') {
     let r=null;try{r=await post('/api/token/create',{});}catch(e){r={ok:false,error:String(e)};}
     if(btn){btn.disabled=false;btn.textContent='Получить токен Claude Code';}
     if(r&&r.ok&&r.token){
-      if(out)out.innerHTML=`<div class="tokok"><div class="tokval mono">${esc(r.token)}</div>
-        <button class="mini" data-t="${esc(r.token)}" onclick="ccopy(this.dataset.t,this)">копировать</button></div>`;
+      if(out)out.innerHTML=`<div class="tokok"><div class="tokrow"><span class="tokval mono">${esc(r.token)}</span>
+        <button class="mini" data-t="${esc(r.token)}" onclick="ccopy(this.dataset.t,this)">копировать</button></div></div>`;
       clog(['ТОКЕН','получен'],'ok');
     }else{
       if(out)out.innerHTML=`<div class="tokerr">${esc((r&&r.error)||'не удалось получить токен')}</div>`;
@@ -1109,20 +1151,6 @@ if (typeof document !== 'undefined') {
     const b=e.target.closest('button');if(b&&b.dataset.s)setSub(b.dataset.s);
   });
   $('#tabs').addEventListener('click',e=>{const b=e.target.closest('button');if(b&&!b.disabled)showTab(b.dataset.tab);});
-
-  $('#file').addEventListener('change',async e=>{
-    const files=[...e.target.files]; if(!files.length)return;
-    const entries=[];
-    for(const f of files){try{entries.push({name:f.name,jar:JSON.parse(await f.text())});}catch(err){}}
-    e.target.value='';
-    if(!entries.length){bstatus('Не удалось прочитать JSON.',true);return;}
-    const r=await (await fetch('/api/vault/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({files:entries})})).json();
-    const a=r.added||0,u=r.updated||0;
-    bstatus('Добавлено: '+a+(u?' · обновлено дублей: '+u:'')+' из '+entries.length);
-    clog(['КУКИ','загрузка','+'+a+(u?' · дублей обновлено '+u:'')+' из '+entries.length],u?'warn':'ok');
-    loadVault();
-  });
-  function bstatus(msg,err){const el=$('#bcount');if(el){el.innerHTML=esc(msg);el.style.color=err?'#ff6b6b':'';}}
 
   async function validProxyCount(){
     try{const j=await (await fetch('/api/proxies')).json();
@@ -1264,6 +1292,38 @@ if (typeof document !== 'undefined') {
     if(cb.checked)bsel.add(cb.dataset.id);else bsel.delete(cb.dataset.id);brender();});
   $('#bcheckSel').addEventListener('click',()=>PXB.checkSel());
   $('#bdel').addEventListener('click',()=>PXB.delSel());
+  const _SKRE=/sk-ant-sid\d{2}-[A-Za-z0-9_-]{30,}/g;
+  function eachKey(text,cb){_SKRE.lastIndex=0;let m;while((m=_SKRE.exec(text||'')))cb(m[0]);}
+  let _pfiles=[],_pfolderFiles=[];
+  $('#pfiles').addEventListener('change',e=>{_pfiles=[...(e.target.files||[])];
+    $('#pfileslabel').textContent=_pfiles.length?`файлы: ${_pfiles.length}`:'Выбрать файлы';});
+  $('#pfolder').addEventListener('change',e=>{_pfolderFiles=[...(e.target.files||[])];
+    $('#pfolderlabel').textContent=_pfolderFiles.length?`папка: ${_pfolderFiles.length}`:'Выбрать папку';});
+  $('#pdoparse').addEventListener('click',async()=>{
+    const btn=$('#pdoparse'),files=[..._pfiles,..._pfolderFiles],text=$('#plog').value||'';
+    if(!text.trim()&&!files.length){$('#presult').textContent='пусто — вставь текст или выбери файлы/папку';return;}
+    btn.disabled=true;btn.textContent='Извлекаю…';
+    const MAX=25*1024*1024,seen=new Set();
+    let found=0,added=0,updated=0,buf=[];
+    async function flush(){
+      if(!buf.length)return;
+      const keys=buf;buf=[];
+      let j=null;try{j=await (await fetch('/api/vault/parse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keys})})).json();}catch(e){j=null;}
+      if(j&&j.ok){added+=j.added||0;updated+=j.updated||0;if(j.items){VAULT=j.items;brender();}}
+      $('#presult').textContent=`найдено ${found} · добавлено ${added}`+(updated?` · обновлено ${updated}`:'');
+    }
+    let big=0;
+    const take=t=>eachKey(t,k=>{if(!seen.has(k)){seen.add(k);found++;buf.push(k);}});
+    take(text);
+    if(buf.length>=100)await flush();
+    for(const f of files){if(f.size>MAX){big++;continue;}try{take(await f.text());}catch(e){}if(buf.length>=100)await flush();}
+    await flush();
+    btn.disabled=false;btn.textContent='Извлечь';
+    if(big)$('#presult').textContent+=` · пропущено больших: ${big}`;
+    clog(['ПАРСЕР','найдено '+found,'+'+added+(updated?' · обновлено '+updated:'')+(big?' · больших пропущено '+big:'')],(found?'ok':'warn'));
+    $('#plog').value='';_pfiles=[];_pfolderFiles=[];$('#pfiles').value='';$('#pfolder').value='';
+    $('#pfileslabel').textContent='Выбрать файлы';$('#pfolderlabel').textContent='Выбрать папку';
+  });
   $('#bact').addEventListener('change',e=>{const v=e.target.value;e.target.value='';if(v)bAction(v);});
   async function bAction(v){
     const ids=[...bsel].filter(id=>VAULT.some(p=>p.id===id));
@@ -1277,6 +1337,7 @@ if (typeof document !== 'undefined') {
     if(v==='topup50')return topupBalance(rows,50);
     if(v==='topup250')return topupBalance(rows,250);
     if(v==='topup1000')return topupBalance(rows,1000);
+    if(v==='gift')return giftFlow(rows);
   }
 
   let GROUPS=[]; const gsort={}; const gsel=new Set();
@@ -1543,6 +1604,42 @@ if (typeof document !== 'undefined') {
       else{const e=(j&&j.error)||'ошибка';clog(['ПОПОЛНЕНИЕ',r.name||'—',e],'err');out.push({name:r.name,ok:false,text:e});}
     }
     await showResults('Пополнение · $'+amount,out);
+  }
+  function giftPicker(){
+    return new Promise(res=>{
+      const m=$('#modal'),ok=$('#modal-ok'),cancel=$('#modal-cancel');
+      const TIERS=[['pro','Pro'],['max_5x','Max 5x'],['max_20x','Max 20x']],MON=[1,3,6,12];
+      $('#modal-title').textContent='Купить гифт';
+      $('#modal-msg').innerHTML=`<div class="giftpick">
+        <label>Подписка<select id="giftTier" class="sel">${TIERS.map(t=>`<option value="${t[0]}">${t[1]}</option>`).join('')}</select></label>
+        <label>Срок<select id="giftMon" class="sel">${MON.map(x=>`<option value="${x}">${x} мес</option>`).join('')}</select></label>
+      </div>`;
+      ok.textContent='Купить';ok.className='check';cancel.style.display='';
+      m.hidden=false;ok.focus();
+      function done(go){m.hidden=true;ok.onclick=cancel.onclick=m.onclick=null;document.removeEventListener('keydown',onKey);
+        if(!go){res(null);return;}
+        const tier=$('#giftTier').value,months=$('#giftMon').value;
+        res({tier,months,label:{pro:'Pro',max_5x:'Max 5x',max_20x:'Max 20x'}[tier]+' · '+months+' мес'});}
+      function onKey(e){if(e.key==='Escape')done(false);}
+      document.addEventListener('keydown',onKey);
+      ok.onclick=()=>done(true);cancel.onclick=()=>done(false);m.onclick=e=>{if(e.target===m)done(false);};
+    });
+  }
+  async function giftFlow(rows){
+    const elig=rows.filter(r=>r.uuid&&r.has_payment),noPmRows=rows.filter(r=>r.uuid&&!r.has_payment);
+    if(!elig.length){await window.confirmModal('Не на что покупать — ни у кого нет привязанной карты.',{info:true,okText:'OK'});return;}
+    const pick=await giftPicker();
+    if(!pick)return;
+    const out=[];
+    noPmRows.forEach(r=>out.push({name:r.name,skipped:true,text:'нет карты'}));
+    for(const r of elig){
+      clog(['ГИФТ',r.name||'—',pick.label+'…'],'act');
+      const j=await apost('/api/account/gift',{uuid:r.uuid,tier:pick.tier,months:pick.months});
+      if(j&&j.ok){clog(['ГИФТ',r.name||'—','✓ '+(j.gift_code||j.status||'')],'ok');out.push({name:r.name,ok:true,text:j.gift_code||j.status||'куплен'});}
+      else if(j&&j.skipped){clog(['ГИФТ',r.name||'—','пропуск: '+(j.error||'нет карты')],'warn');out.push({name:r.name,skipped:true,text:j.error||'нет карты'});}
+      else{const e=(j&&j.error)||'ошибка';clog(['ГИФТ',r.name||'—',e],'err');out.push({name:r.name,ok:false,text:e});}
+    }
+    await showResults('Гифт · '+pick.label,out);
   }
   async function gAction(gid,v){
     const g=GROUPS.find(x=>x.id===gid);if(!g)return;

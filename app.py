@@ -7,6 +7,7 @@ import io
 import json
 import os
 import random
+import re
 import secrets
 import string
 import subprocess
@@ -314,7 +315,7 @@ def claude_code_token(session, org):
     st, data, code = _authorize_post(session, org, body)
     if not code:
         return {"ok": False,
-                "error": f"Авторизация HTTP {st}: код не получен (нужен Arkose/браузер). {_snip(data)}".strip()}
+                "error": f"Авторизация HTTP {st}: код не получен. {_snip(data)}".strip()}
     ex = {
         "grant_type": "authorization_code", "code": code, "state": state,
         "client_id": CC_CLIENT_ID, "redirect_uri": CC_REDIRECT, "code_verifier": verifier,
@@ -443,6 +444,53 @@ def claude_buy_credits(session, org, denom):
         res["error"] = (f"платёж не прошёл: {status}" if status
                         else "платёж не подтверждён (таймаут)")
     return res
+
+
+GIFT_TIERS = ("pro", "max_5x", "max_20x")
+
+
+def claude_buy_gift(session, org, tier, months, to_email=None, from_name=None):
+    if not org:
+        return {"ok": False, "error": "Не удалось определить организацию"}
+    if tier not in GIFT_TIERS:
+        return {"ok": False, "error": "неизвестный тариф гифта"}
+    st, d = api_get("/billing/gift/products?currency=USD", session)
+    if not (st and st < 400 and isinstance(d, dict)):
+        return {"ok": False, "error": _api_err(st, d)}
+    product_id = None
+    for p in (d.get("products") or []):
+        if p.get("tier") == tier and str(p.get("duration_months")) == str(months):
+            product_id = p.get("product_id")
+            break
+    if not product_id:
+        return {"ok": False, "error": f"гифт {tier}/{months}мес не найден в каталоге"}
+    body = {
+        "product_id": product_id, "currency": "USD",
+        "use_saved_payment_method": True,
+        "to_email": to_email or "", "to_name": "",
+        "from_name": from_name or "", "from_email": to_email or "",
+        "gift_message": "", "card_color": "clay",
+        "billing_address": {"line1": "", "city": "", "state": "",
+                            "postal_code": "", "country": ""},
+        "scheduled_delivery_at": None,
+    }
+    st, data = api_request("POST", f"/billing/{org}/gift/purchase", session,
+                           payload=body, extra_headers=mutation_headers(session))
+    if not (st and st < 400 and isinstance(data, dict)):
+        return {"ok": False, "error": _api_err(st, data)}
+    if data.get("requires_cvc"):
+        return {"ok": False, "error": "Нужен CVC код"}
+    if data.get("requires_action"):
+        cs = data.get("client_secret")
+        if cs:
+            r = _confirm_pi(cs, session.get("proxy"))
+            if r.get("ok"):
+                return {"ok": True, "gift_code": data.get("gift_code"),
+                        "status": "succeeded"}
+            return {"ok": False, "error": r.get("error") or "Нужно 3DS-подтверждение"}
+        return {"ok": False, "error": "Нужно 3DS-подтверждение"}
+    return {"ok": True, "gift_code": data.get("gift_code"),
+            "status": data.get("delivery_status")}
 
 
 def _try_json(text):
@@ -681,6 +729,32 @@ def add_cookie_jar(jar, fallback_name=None):
     items.append(entry)
     write_vault(items)
     return "added"
+
+
+_SK_RE = re.compile(r"sk-ant-sid\d{2}-[A-Za-z0-9_-]{30,}")
+
+
+def extract_session_keys(text):
+    seen, out = set(), []
+    for m in _SK_RE.findall(text or ""):
+        if m not in seen:
+            seen.add(m)
+            out.append(m)
+    return out
+
+
+def add_session_keys(keys):
+    added = updated = 0
+    with _DATA_LOCK:
+        for key in keys:
+            res = add_cookie_jar([{"name": "sessionKey", "value": key}])
+            if res == "added":
+                added += 1
+            elif res == "updated":
+                updated += 1
+        items = _vault_rows(read_vault())
+    return {"ok": True, "found": len(keys), "added": added,
+            "updated": updated, "items": items}
 
 
 def read_proxies():
@@ -925,15 +999,17 @@ def _build_report(session, level, should_stop=None):
             "usage": partial(fetch_usage, session, ou),
             "subscription": partial(get, f"/organizations/{ou}/subscription_details"),
             "balance": partial(get, f"/stripe/{ou}/balance"),
+            "credits": partial(get, f"/organizations/{ou}/prepaid/credits"),
             "overage": partial(get, f"/organizations/{ou}/overage_spend_limit"),
             "payment_method": partial(get, f"/organizations/{ou}/payment_method"),
+            "referral": partial(get, f"/organizations/{ou}/referral/eligibility"
+                                "?campaign=claude_code_guest_pass&source=claude_code"),
         })
         if level == "full":
             tasks.update({
                 "sessions": partial(fetch_all_sessions, session),
                 "tokens": partial(fetch_all_tokens, session, ou),
                 "invoices": partial(get, f"/stripe/{ou}/invoices"),
-                "credits": partial(get, f"/organizations/{ou}/prepaid/credits"),
             })
     if should_stop and should_stop():
         return None
@@ -970,6 +1046,7 @@ def _build_report(session, level, should_stop=None):
         "invoices": r.get("invoices"),
         "sessions": r.get("sessions"),
         "tokens": r.get("tokens"),
+        "referral": r.get("referral"),
         "payment_method": r.get("payment_method"),
         "mini": level == "mini",
         "check_err": check_err,
@@ -1031,6 +1108,8 @@ def _update_vault_status(vid, ok, info, proxy):
                               "limit", "currency", "auto_renew", "has_payment", "renew"):
                         if info.get(k) is not None:
                             it[k] = info[k]
+                    if info.get("balance") is not None:
+                        it["bal_cur"] = info.get("bal_cur")
                     if it["mini"]:
                         for k in ("balance", "bal_cur", "used", "limit", "currency",
                                   "auto_renew", "has_payment", "renew"):
@@ -1050,6 +1129,12 @@ def _extract_info(data):
     org = data.get("org") or {}
     ov = data.get("overage") or {}
     bal = data.get("balance") or {}
+    cr = data.get("credits") or {}
+    bal_amt = cr.get("amount")
+    bal_cur = cr.get("currency")
+    if bal_amt is None:
+        bal_amt = bal.get("balance")
+        bal_cur = bal.get("currency")
     u = data.get("usage") or {}
     sub = data.get("subscription") or {}
     pm = data.get("payment_method")
@@ -1061,7 +1146,7 @@ def _extract_info(data):
         "plan": org.get("plan"), "tier": org.get("tier"),
         "used": ov.get("used_credits"), "limit": ov.get("monthly_credit_limit"),
         "currency": ov.get("currency") or "USD",
-        "balance": bal.get("balance"), "bal_cur": bal.get("currency"),
+        "balance": bal_amt, "bal_cur": bal_cur,
         "auto_renew": bool(sub) and status in ("active", "trialing") and not cancelled,
         "has_payment": bool(pm) or bool(sub.get("payment_method")),
         "renew": sub.get("next_charge_at") or sub.get("next_charge_date"),
@@ -1503,7 +1588,20 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/groups/delete":
                 gid = self._body().get("id")
                 with _DATA_LOCK:
-                    write_groups([g for g in read_groups() if g.get("id") != gid])
+                    groups = read_groups()
+                    target = next((g for g in groups if g.get("id") == gid), None)
+                    remaining = [g for g in groups if g.get("id") != gid]
+                    write_groups(remaining)
+                    if target:
+                        still = {r.get("uuid") for g in remaining
+                                 for r in (g.get("results") or []) if r.get("uuid")}
+                        drop = {r.get("uuid") for r in (target.get("results") or [])
+                                if r.get("uuid")} - still
+                        if drop:
+                            hist = read_history()
+                            for u in drop:
+                                hist.pop(u, None)
+                            write_history(hist)
                 self._send(200, {"ok": True})
             elif self.path == "/api/export":
                 body = self._body()
@@ -1702,6 +1800,21 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 ou = _org_uuid_for(uuid) or org_for(session)
                 self._send(200, claude_buy_credits(session, ou, body.get("amount")))
+            elif self.path == "/api/account/gift":
+                body = self._body()
+                uuid = body.get("uuid")
+                session = _strict_session(uuid)
+                if not session:
+                    self._send(200, {"ok": False, "error": "Сессия для аккаунта не найдена"})
+                    return
+                if not _has_payment_for(uuid):
+                    self._send(200, {"ok": False, "skipped": True, "error": "Нет привязанной карты"})
+                    return
+                ou = _org_uuid_for(uuid) or org_for(session)
+                acc = ((read_history().get(uuid) or {}).get("data") or {}).get("account") or {}
+                self._send(200, claude_buy_gift(session, ou, body.get("tier"), body.get("months"),
+                                                acc.get("email"),
+                                                acc.get("full_name") or acc.get("display_name")))
             elif self.path == "/api/oauth/authorize":
                 body = self._body()
                 uuid = body.get("uuid")
@@ -1754,6 +1867,13 @@ class Handler(BaseHTTPRequestHandler):
                             updated += 1
                     items = _vault_rows(read_vault())
                 self._send(200, {"ok": True, "added": added, "updated": updated, "items": items})
+            elif self.path == "/api/vault/parse":
+                body = self._body()
+                text = body.get("text") or ""
+                keys = body.get("keys")
+                if isinstance(keys, list):
+                    text += " " + " ".join(str(k) for k in keys)
+                self._send(200, add_session_keys(extract_session_keys(text)))
             elif self.path == "/api/vault/delete":
                 sid = str(self._body().get("id") or "")
                 with _DATA_LOCK:
