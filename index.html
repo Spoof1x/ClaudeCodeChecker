@@ -1066,16 +1066,18 @@ if (typeof document !== 'undefined') {
   };
 
   window.getClaudeToken=async function(btn){
-    if(!await window.confirmModal('Сгенерировать токен Claude Code для этого аккаунта? Запрос пойдёт через его прокси.',{okText:'Получить'}))return;
+    if(!await window.confirmModal('Сгенерировать OAuth-токен Claude Code (access + refresh, все права) для этого аккаунта? Запрос пойдёт через его прокси.',{okText:'Получить'}))return;
     if(btn){btn.disabled=true;btn.textContent='Получение…';}
     const out=$('#tokout');if(out)out.innerHTML='<div class="empty"><span class="spin"></span> запрос…</div>';
     clog(['ТОКЕН','запрос…'],'act');
     let r=null;try{r=await post('/api/token/create',{});}catch(e){r={ok:false,error:String(e)};}
     if(btn){btn.disabled=false;btn.textContent='Получить токен Claude Code';}
-    if(r&&r.ok&&r.token){
-      if(out)out.innerHTML=`<div class="tokok"><div class="tokrow"><span class="tokval mono">${esc(r.token)}</span>
-        <button class="mini" data-t="${esc(r.token)}" onclick="ccopy(this.dataset.t,this)">копировать</button></div></div>`;
-      clog(['ТОКЕН','получен'],'ok');
+    if(r&&r.ok&&(r.json||r.token)){
+      const txt=r.json?JSON.stringify(r.json,null,2):r.token;
+      if(out)out.innerHTML=`<div class="tokok"><div class="tokrow" style="align-items:flex-start">
+        <pre class="tokval mono" style="white-space:pre-wrap;margin:0;flex:1;max-height:320px;overflow:auto">${esc(txt)}</pre>
+        <button class="mini" data-t="${esc(txt)}" onclick="ccopy(this.dataset.t,this)">копировать</button></div></div>`;
+      clog(['ТОКЕН','получен',r.scope?('scope: '+r.scope):''].filter(Boolean),'ok');
     }else{
       if(out)out.innerHTML=`<div class="tokerr">${esc((r&&r.error)||'не удалось получить токен')}</div>`;
       clog(['ТОКЕН','ошибка',(r&&r.error)||'—'],'err');

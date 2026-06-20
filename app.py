@@ -219,7 +219,8 @@ def mutation_headers(session):
 
 
 CC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-CC_SCOPE = "user:inference"
+CC_SCOPE = ("user:profile user:inference user:sessions:claude_code "
+            "user:mcp_servers user:file_upload")
 CC_REDIRECT = "http://localhost:45289/callback"
 CC_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 
@@ -328,7 +329,9 @@ def claude_code_token(session, org):
         st2, data2 = _oauth_exchange(ex, session.get("proxy"))
     if isinstance(data2, dict) and data2.get("access_token"):
         return {"ok": True, "token": data2["access_token"],
-                "refresh": data2.get("refresh_token"), "expires_in": data2.get("expires_in")}
+                "refresh": data2.get("refresh_token"),
+                "expires_in": data2.get("expires_in"),
+                "scope": data2.get("scope"), "json": data2}
     if st2 == 429:
         return {"ok": False, "code_ok": True,
                 "error": "Обмен: слишком много запросов (429). Подождите пару минут или смените аккаунт."}
